@@ -70,15 +70,20 @@ def main():
             continue
 
         if correct:
-            status = "OK"
+            trials = r.get("correct_trials", "")
+            status = f"OK {trials}".strip()
             correct_rows.append(r)
         else:
-            status = "WRONG OUTPUT"
+            trials = r.get("correct_trials", "")
+            status = f"WRONG {trials}".strip()
 
         max_diff = f"{r.get('max_diff', float('nan')):.2e}"
-        kernel_ms = f"{r.get('kernel_ms', float('nan')):.2f}"
-        ref_ms = f"{r.get('ref_ms', float('nan')):.2f}"
-        speedup = f"{r.get('speedup', float('nan')):.3f}x"
+        if correct:
+            kernel_ms = f"{r.get('kernel_ms', float('nan')):.2f}"
+            ref_ms    = f"{r.get('ref_ms', float('nan')):.2f}"
+            speedup   = f"{r.get('speedup', float('nan')):.3f}x"
+        else:
+            kernel_ms = ref_ms = speedup = "N/A"
 
         print(f"  {r['problem_id']:>6}  {r['stage']:>5}  {dtype:>5}  {shape:<28}  {status:^14}  {max_diff:>10}  {kernel_ms:>10}  {ref_ms:>8}  {speedup:>8}")
 

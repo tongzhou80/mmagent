@@ -46,6 +46,7 @@ PROBLEM_SIZES = {
 
 NUM_WARMUP = 3
 NUM_TRIALS = 20
+NUM_CORRECT_TRIALS = 3
 
 # Match KernelBench tolerances (inspired by torchbench)
 PRECISION_TOLERANCES = {
@@ -187,23 +188,38 @@ def main():
         sys.exit(1)
 
     # --- Correctness ---
-    print("Checking correctness...")
-    A = torch.rand(M, K, device="cuda", dtype=torch_dtype)
-    B = torch.rand(K, N, device="cuda", dtype=torch_dtype)
-    ref = torch.matmul(A, B)
+    print(f"Checking correctness ({NUM_CORRECT_TRIALS} trials)...")
+    pass_count = 0
+    max_diffs = []
 
     try:
-        out = run_kernel(A, B)
-        torch.cuda.synchronize()
-        # Compare on CPU to avoid OOM on large output matrices
-        ref_cpu = ref.cpu()
-        out_cpu = out.cpu()
-        torch.cuda.empty_cache()
-        correct = torch.allclose(out_cpu, ref_cpu, atol=tol, rtol=tol)
-        max_diff = (out_cpu - ref_cpu).abs().max().item()
-        result.update({"correctness": correct, "max_diff": round(max_diff, 6)})
-        status = "PASS" if correct else "FAIL"
-        print(f"  [{status}]  max_diff={max_diff:.2e}")
+        for trial in range(NUM_CORRECT_TRIALS):
+            torch.manual_seed(trial)
+            A = torch.rand(M, K, device="cuda", dtype=torch_dtype)
+            B = torch.rand(K, N, device="cuda", dtype=torch_dtype)
+            ref = torch.matmul(A, B)
+
+            out = run_kernel(A, B)
+            torch.cuda.synchronize()
+            # Compare on CPU to avoid OOM on large output matrices
+            ref_cpu = ref.cpu()
+            out_cpu = out.cpu()
+            torch.cuda.empty_cache()
+
+            max_diff = (out_cpu - ref_cpu).abs().max().item()
+            max_diffs.append(max_diff)
+            passed = torch.allclose(out_cpu, ref_cpu, atol=tol, rtol=tol)
+            status = "PASS" if passed else "FAIL"
+            print(f"  trial {trial+1}/{NUM_CORRECT_TRIALS}: [{status}]  max_diff={max_diff:.2e}")
+            if passed:
+                pass_count += 1
+
+        correct = (pass_count == NUM_CORRECT_TRIALS)
+        result.update({
+            "correctness": correct,
+            "correct_trials": f"{pass_count}/{NUM_CORRECT_TRIALS}",
+            "max_diff": round(max(max_diffs), 6),
+        })
     except Exception:
         err = traceback.format_exc()
         print(f"[RUNTIME ERROR]\n{err}")
@@ -213,7 +229,16 @@ def main():
         sys.exit(1)
 
     # --- Performance ---
+    if not correct:
+        print("Skipping performance measurement (correctness failed).")
+        with open(result_path, "w") as f:
+            json.dump(result, f, indent=2)
+        sys.exit(0)
+
     print(f"Measuring performance ({NUM_TRIALS} trials)...")
+    torch.manual_seed(0)
+    A = torch.rand(M, K, device="cuda", dtype=torch_dtype)
+    B = torch.rand(K, N, device="cuda", dtype=torch_dtype)
     kernel_ms = measure_runtime_ms(run_kernel, A, B)
     ref_ms    = measure_runtime_ms(torch.matmul, A, B)
     speedup   = ref_ms / kernel_ms
